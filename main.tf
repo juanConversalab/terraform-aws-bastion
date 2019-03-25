@@ -8,7 +8,7 @@ data "template_file" "user_data" {
 }
 
 resource "aws_s3_bucket" "bucket" {
-  bucket = "${var.bucket_name}"
+  bucket_prefix = "${var.bucket_name}"
   acl    = "bucket-owner-full-control"
 
   versioning {
