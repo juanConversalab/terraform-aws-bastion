@@ -102,3 +102,8 @@ variable "private_ssh_port" {
   description = "Set the SSH port to use between the bastion and private instance"
   default     = 22
 }
+
+variable "asg_name" {
+  description = "Bastion AutoScaling Group Name"
+  default     = "BASTION-ASG"
+}
