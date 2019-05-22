@@ -3,7 +3,7 @@ data "template_file" "user_data" {
 
   vars {
     aws_region  = "${var.region}"
-    bucket_name = "${var.bucket_name}"
+    bucket_name = "${aws_s3_bucket.bucket.id}"
   }
 }
 
@@ -139,17 +139,17 @@ resource "aws_iam_role_policy" "bastion_host_role_policy" {
         "s3:PutObject",
         "s3:PutObjectAcl"
       ],
-      "Resource": "arn:aws:s3:::${var.bucket_name}/logs/*"
+      "Resource": "arn:aws:s3:::${aws_s3_bucket.bucket.id}/logs/*"
     },
     {
       "Effect": "Allow",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::${var.bucket_name}/public-keys/*"
+      "Resource": "arn:aws:s3:::${aws_s3_bucket.bucket.id}/public-keys/*"
     },
     {
       "Effect": "Allow",
       "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::${var.bucket_name}",
+      "Resource": "arn:aws:s3:::${aws_s3_bucket.bucket.id}",
       "Condition": {
         "StringEquals": {
           "s3:prefix": "public-keys/"
