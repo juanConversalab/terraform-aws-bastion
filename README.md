@@ -69,6 +69,7 @@ module "bastion" {
 | elb_subnets | List of subnet were the ELB will be deployed | list | - | yes |
 | hosted_zone_name | Name of the hosted zone were we'll register the bastion DNS name | string | `` | no |
 | is_lb_private | If TRUE the load balancer scheme will be "internal" else "internet-facing" | string | - | yes |
+| image_id | Image ID to be used in Launch Configuration | string | `` | no |
 | log_auto_clean | Enable or not the lifecycle | string | `false` | no |
 | log_expiry_days | Number of days before logs expiration | string | `90` | no |
 | log_glacier_days | Number of days before moving logs to Glacier | string | `60` | no |

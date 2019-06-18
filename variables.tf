@@ -107,3 +107,8 @@ variable "asg_name" {
   description = "Bastion AutoScaling Group Name"
   default     = "BASTION-ASG"
 }
+
+variable "image_id" {
+  description = "Bastion Launch Configuration Image ID"
+  default     = ""
+}
