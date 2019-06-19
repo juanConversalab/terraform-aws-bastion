@@ -1,5 +1,7 @@
 AWS Bastion Terraform module
 ===========================================
+A Terraform module that contains common configurations for a Bastion Ec2 of AWS.
+Available through the Terraform registry.[Terraform registry](https://registry.terraform.io/modules/Guimove/bastion/aws/)
 
 [![Open Source Helpers](https://www.codetriage.com/guimove/terraform-aws-bastion/badges/users.svg)](https://www.codetriage.com/guimove/terraform-aws-bastion)
 
