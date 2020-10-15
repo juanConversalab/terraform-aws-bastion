@@ -2,14 +2,36 @@ data "template_file" "user_data" {
   template = file("${path.module}/user_data.sh")
 
   vars = {
-    aws_region  = var.region
-    bucket_name = aws_s3_bucket.bucket.id
+    aws_region              = var.region
+    bucket_name             = var.bucket_name
+    extra_user_data_content = var.extra_user_data_content
+    allow_ssh_commands      = var.allow_ssh_commands
+    public_ssh_port         = var.public_ssh_port
   }
 }
 
+resource "aws_kms_key" "key" {
+  tags = merge(var.tags)
+}
+
+resource "aws_kms_alias" "alias" {
+  name          = "alias/${var.bucket_name}"
+  target_key_id = aws_kms_key.key.arn
+}
+
 resource "aws_s3_bucket" "bucket" {
-  bucket_prefix = var.bucket_name
-  acl           = "bucket-owner-full-control"
+  bucket = var.bucket_name
+  acl    = "bucket-owner-full-control"
+
+  server_side_encryption_configuration {
+    rule {
+      apply_server_side_encryption_by_default {
+        kms_master_key_id = aws_kms_key.key.id
+        sse_algorithm     = "aws:kms"
+      }
+    }
+  }
+
 
   force_destroy = var.bucket_force_destroy
 
@@ -24,8 +46,8 @@ resource "aws_s3_bucket" "bucket" {
     prefix = "logs/"
 
     tags = {
-      "rule"      = "log"
-      "autoclean" = var.log_auto_clean
+      rule      = "log"
+      autoclean = var.log_auto_clean
     }
 
     transition {
@@ -50,6 +72,7 @@ resource "aws_s3_bucket_object" "bucket_public_keys_readme" {
   bucket  = aws_s3_bucket.bucket.id
   key     = "public-keys/README.txt"
   content = "Drop here the ssh public keys of the instances you want to control"
+  kms_key_id = aws_kms_key.key.arn
 }
 
 resource "aws_security_group" "bastion_host_security_group" {
@@ -79,15 +102,6 @@ resource "aws_security_group_rule" "egress_bastion" {
   protocol    = "-1"
   cidr_blocks = ["0.0.0.0/0"]
 
-    egress {
-      from_port   = 0
-      to_port     = 0
-      protocol    = "-1"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
-
-  # tags = "${merge(var.tags)}"
-
   security_group_id = aws_security_group.bastion_host_security_group.id
 }
 
@@ -102,8 +116,8 @@ resource "aws_security_group" "private_instances_security_group" {
 resource "aws_security_group_rule" "ingress_instances" {
   description = "Incoming traffic from bastion"
   type        = "ingress"
-  from_port   = var.public_ssh_port
-  to_port     = var.public_ssh_port
+  from_port   = var.private_ssh_port
+  to_port     = var.private_ssh_port
   protocol    = "TCP"
 
   source_security_group_id = aws_security_group.bastion_host_security_group.id
@@ -111,71 +125,80 @@ resource "aws_security_group_rule" "ingress_instances" {
   security_group_id = aws_security_group.private_instances_security_group.id
 }
 
+data "aws_iam_policy_document" "assume_policy_document" {
+  statement {
+    actions = [
+      "sts:AssumeRole"
+    ]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
 resource "aws_iam_role" "bastion_host_role" {
-  path = "/"
+  path               = "/"
+  assume_role_policy = data.aws_iam_policy_document.assume_policy_document.json
+}
 
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": [
-          "ec2.amazonaws.com"
-        ]
-      },
-      "Action": [
-        "sts:AssumeRole"
-      ]
+data "aws_iam_policy_document" "bastion_host_policy_document" {
+
+  statement {
+    actions = [
+      "s3:PutObject",
+      "s3:PutObjectAcl"
+    ]
+    resources = ["${aws_s3_bucket.bucket.arn}/logs/*"]
+  }
+
+  statement {
+    actions = [
+      "s3:GetObject"
+    ]
+    resources = ["${aws_s3_bucket.bucket.arn}/public-keys/*"]
+  }
+
+  statement {
+    actions = [
+      "s3:ListBucket"
+    ]
+    resources = [
+    aws_s3_bucket.bucket.arn]
+
+    condition {
+      test     = "ForAnyValue:StringEquals"
+      values   = ["public-keys/"]
+      variable = "s3:prefix"
     }
-  ]
-}
-EOF
+  }
+
+  statement {
+    actions = [
+
+      "kms:Encrypt",
+      "kms:Decrypt"
+    ]
+    resources = [aws_kms_key.key.arn]
+  }
 
 }
 
-resource "aws_iam_role_policy" "bastion_host_role_policy" {
-  role = aws_iam_role.bastion_host_role.id
-
-  policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:PutObjectAcl"
-      ],
-      "Resource": "arn:aws:s3:::${aws_s3_bucket.bucket.id}/logs/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::${aws_s3_bucket.bucket.id}/public-keys/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::${aws_s3_bucket.bucket.id}",
-      "Condition": {
-        "StringEquals": {
-          "s3:prefix": "public-keys/"
-        }
-      }
-    }
-  ]
+resource "aws_iam_policy" "bastion_host_policy" {
+  name   = var.bastion_iam_policy_name
+  policy = data.aws_iam_policy_document.bastion_host_policy_document.json
 }
-EOF
 
+resource "aws_iam_role_policy_attachment" "bastion_host" {
+  policy_arn = aws_iam_policy.bastion_host_policy.arn
+  role       = aws_iam_role.bastion_host_role.name
 }
 
 resource "aws_route53_record" "bastion_record_name" {
   name    = var.bastion_record_name
-  zone_id = var.hosted_zone_name
+  zone_id = var.hosted_zone_id
   type    = "A"
-  count   = var.create_dns_record
+  count   = var.create_dns_record ? 1 : 0
 
   alias {
     evaluate_target_health = true
@@ -225,20 +248,34 @@ resource "aws_iam_instance_profile" "bastion_host_profile" {
   path = "/"
 }
 
-resource "aws_launch_configuration" "bastion_launch_configuration" {
-  name_prefix                 = var.bastion_launch_configuration_name
-  image_id                    = var.image_id != "" ? var.image_id : data.aws_ami.amazon-linux-2.id
-  instance_type               = "t2.nano"
-  associate_public_ip_address = var.associate_public_ip_address
-  enable_monitoring           = true
-  iam_instance_profile        = aws_iam_instance_profile.bastion_host_profile.name
-  key_name                    = var.bastion_host_key_pair
+resource "aws_launch_template" "bastion_launch_template" {
+  name_prefix   = local.name_prefix
+  image_id      = var.bastion_ami != "" ? var.bastion_ami : data.aws_ami.amazon-linux-2.id
+  instance_type = var.instance_type
+  monitoring {
+    enabled = true
+  }
+  network_interfaces {
+    associate_public_ip_address = var.associate_public_ip_address
+    security_groups             = [aws_security_group.bastion_host_security_group.id]
+    delete_on_termination       = true
+  }
+  iam_instance_profile {
+    name = aws_iam_instance_profile.bastion_host_profile.name
+  }
+  key_name = var.bastion_host_key_pair
 
-  security_groups = [
-    aws_security_group.bastion_host_security_group.id,
-  ]
+  user_data = base64encode(data.template_file.user_data.rendered)
 
-  user_data = data.template_file.user_data.rendered
+  tag_specifications {
+    resource_type = "instance"
+    tags          = merge(map("Name", var.bastion_launch_template_name), merge(var.tags))
+  }
+
+  tag_specifications {
+    resource_type = "volume"
+    tags          = merge(map("Name", var.bastion_launch_template_name), merge(var.tags))
+  }
 
   lifecycle {
     create_before_destroy = true
@@ -246,11 +283,14 @@ resource "aws_launch_configuration" "bastion_launch_configuration" {
 }
 
 resource "aws_autoscaling_group" "bastion_auto_scaling_group" {
-  name                 = "${var.asg_name}-${aws_launch_configuration.bastion_launch_configuration.name}"
-  launch_configuration = aws_launch_configuration.bastion_launch_configuration.name
-  max_size             = var.bastion_instance_count
-  min_size             = var.bastion_instance_count
-  desired_capacity     = var.bastion_instance_count
+  name_prefix = "ASG-${local.name_prefix}"
+  launch_template {
+    id      = aws_launch_template.bastion_launch_template.id
+    version = "$Latest"
+  }
+  max_size         = var.bastion_instance_count
+  min_size         = var.bastion_instance_count
+  desired_capacity = var.bastion_instance_count
 
   vpc_zone_identifier = var.auto_scaling_group_subnets
 
@@ -266,29 +306,12 @@ resource "aws_autoscaling_group" "bastion_auto_scaling_group" {
     "OldestLaunchConfiguration",
   ]
 
-  # TF-UPGRADE-TODO: In Terraform v0.10 and earlier, it was sometimes necessary to
-  # force an interpolation expression to be interpreted as a list by wrapping it
-  # in an extra set of list brackets. That form was supported for compatibility in
-  # v0.11, but is no longer supported in Terraform v0.12.
-  #
-  # If the expression in the following list itself returns a list, remove the
-  # brackets to avoid interpretation as a list of lists. If the expression
-  # returns a single list item then leave it as-is and remove this TODO comment.
-  tags = [
-    concat(
-      [
-        {
-          "key"                 = "Name"
-          "value"               = "ASG-${aws_launch_configuration.bastion_launch_configuration.name}"
-          "propagate_at_launch" = true
-        },
-      ],
-      local.tags_asg_format,
-    ),
-  ]
+  tags = concat(
+    list(map("key", "Name", "value", "ASG-${local.name_prefix}", "propagate_at_launch", true)),
+    local.tags_asg_format
+  )
 
   lifecycle {
     create_before_destroy = true
   }
 }
-
